@@ -3,6 +3,7 @@ import {
   Liquidity,
   LIQUIDITY_STATE_LAYOUT_V4,
   LiquidityPoolKeys,
+  LiquidityStateLayoutV4,
   LiquidityStateV4,
   MARKET_STATE_LAYOUT_V3,
   MarketStateV3,
@@ -69,6 +70,7 @@ const network = 'mainnet-beta';
 const RPC_ENDPOINT = retrieveEnvVariable('RPC_ENDPOINT', logger);
 const RPC_WEBSOCKET_ENDPOINT = retrieveEnvVariable('RPC_WEBSOCKET_ENDPOINT', logger);
 
+
 const solanaConnection = new Connection(RPC_ENDPOINT, {
   wsEndpoint: RPC_WEBSOCKET_ENDPOINT,
 });
@@ -76,6 +78,7 @@ const solanaConnection = new Connection(RPC_ENDPOINT, {
 export type MinimalTokenAccountData = {
   mint: PublicKey;
   address: PublicKey;
+  buyValue?: number;
   poolKeys?: LiquidityPoolKeys;
   market?: MinimalMarketLayoutV3;
 };
@@ -90,6 +93,8 @@ let quoteTokenAssociatedAddress: PublicKey;
 let quoteAmount: TokenAmount;
 let commitment: Commitment = retrieveEnvVariable('COMMITMENT_LEVEL', logger) as Commitment;
 
+const TAKE_PROFIT = Number(retrieveEnvVariable('TAKE_PROFIT', logger))
+const STOP_LOSS = Number(retrieveEnvVariable('STOP_LOSS', logger))
 const CHECK_IF_MINT_IS_RENOUNCED = retrieveEnvVariable('CHECK_IF_MINT_IS_RENOUNCED', logger) === 'true';
 const USE_SNIPE_LIST = retrieveEnvVariable('USE_SNIPE_LIST', logger) === 'true';
 const SNIPE_LIST_REFRESH_INTERVAL = Number(retrieveEnvVariable('SNIPE_LIST_REFRESH_INTERVAL', logger));
@@ -276,13 +281,18 @@ async function buy(accountId: PublicKey, accountData: LiquidityStateV4): Promise
       commitment,
     );
     if (!confirmation.value.err) {
+      const tokenValue = await getTokenValue(accountData)
+      if (tokenValue) {
+        tokenAccount.buyValue = tokenValue
+      }
+
       logger.info(
         {
           mint: accountData.baseMint,
           signature,
           url: `https://solscan.io/tx/${signature}?cluster=${network}`,
         },
-        `Confirmed buy tx`,
+        `Confirmed buy tx... Bought at: ${tokenValue}`,
       );
     } else {
       logger.debug(confirmation.value.err);
@@ -294,7 +304,24 @@ async function buy(accountId: PublicKey, accountData: LiquidityStateV4): Promise
   }
 }
 
-async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish): Promise<void> {
+async function getTokenValue(poolState: LiquidityStateV4): Promise<number | null> {
+  const basePromise = solanaConnection.getTokenAccountBalance(poolState.baseVault, commitment)
+  const quotePromise = solanaConnection.getTokenAccountBalance(poolState.quoteVault, commitment)
+
+  await Promise.all([basePromise, quotePromise])
+
+  const baseValue = await basePromise
+  const quoteValue = await quotePromise
+
+  if (!baseValue?.value?.uiAmount || !quoteValue?.value?.uiAmount) {
+    logger.warn("Could not fetch SOL price of token")
+    return null
+  } else {
+      return quoteValue.value.uiAmount / baseValue.value.uiAmount
+  }
+}
+
+async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish, value: number): Promise<boolean> {
   let sold = false;
   let retries = 0;
 
@@ -303,7 +330,7 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish)
       const tokenAccount = existingTokenAccounts.get(mint.toString());
 
       if (!tokenAccount) {
-        return;
+        return false;
       }
 
       if (!tokenAccount.poolKeys) {
@@ -318,8 +345,14 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish)
           },
           `Empty balance, can't sell`,
         );
-        return;
+        return false;
       }
+
+      // check st/tp
+      if (tokenAccount.buyValue === undefined) return false;
+
+      const netChange = (value - tokenAccount.buyValue) / tokenAccount.buyValue;
+      if (netChange > STOP_LOSS && netChange < TAKE_PROFIT) return false;
 
       const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
         {
@@ -370,7 +403,7 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish)
 
       logger.info(
         { mint, signature, url: `https://solscan.io/tx/${signature}?cluster=${network}` },
-        `Confirmed sell tx`,
+        `Confirmed sell tx... Sold at: ${value}\tNet Profit: ${netChange * 100}%`,
       );
       sold = true;
     } catch (e: any) {
@@ -379,6 +412,7 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish)
       logger.error({ mint }, `Failed to sell token, retry: ${retries}/${MAX_SELL_RETRIES}`);
     }
   } while (!sold && retries < MAX_SELL_RETRIES);
+  return true
 }
 
 function loadSnipeList() {
@@ -469,12 +503,19 @@ const runListener = async () => {
       TOKEN_PROGRAM_ID,
       async (updatedAccountInfo) => {
         const accountData = AccountLayout.decode(updatedAccountInfo.accountInfo!.data);
+        const poolState = LIQUIDITY_STATE_LAYOUT_V4.decode(updatedAccountInfo.accountInfo.data);
 
         if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
           return;
         }
+       
+        // repeadetly check if we have sold at a stop-loss or take-profit
+        const intervalId = setInterval(async () => {
+          const currValue = await getTokenValue(poolState) as number
+          const sold = await sell(updatedAccountInfo.accountId, accountData.mint, accountData.amount, currValue);
+          if (sold) clearInterval(intervalId)
+        }, 1000);
 
-        const _ = sell(updatedAccountInfo.accountId, accountData.mint, accountData.amount);
       },
       commitment,
       [
