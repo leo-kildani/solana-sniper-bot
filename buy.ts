@@ -288,9 +288,9 @@ async function buy(accountId: PublicKey, accountData: LiquidityStateV4): Promise
 
       logger.info(
         {
-          mint: accountData.baseMint,
           signature,
           url: `https://solscan.io/tx/${signature}?cluster=${network}`,
+          dex: `https://dexscreener.com/solana/${accountData.baseMint}?maker=${wallet.publicKey}`
         },
         `Confirmed buy tx... Bought at: ${tokenValue}`,
       );
@@ -402,7 +402,10 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish,
       }
 
       logger.info(
-        { mint, signature, url: `https://solscan.io/tx/${signature}?cluster=${network}` },
+        { mint,
+          signature, 
+          url: `https://solscan.io/tx/${signature}?cluster=${network}`,
+          dex: `https://dexscreener.com/solana/${mint}?maker=${wallet.publicKey}` },
         `Confirmed sell tx... Sold at: ${value}\tNet Profit: ${netChange * 100}%`,
       );
       sold = true;
