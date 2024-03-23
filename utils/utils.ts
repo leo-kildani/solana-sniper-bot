@@ -78,7 +78,6 @@ export const retrieveTokenValueByAddress = async (tokenAddress: string) => {
   const tokenResponse: TokensResponse = (await axios.get(url)).data;
   if (tokenResponse.pairs) {
     const pair = tokenResponse.pairs.find((pair) => (pair.chainId = 'solana'));
-    logger.info(pair);
     const priceNative = pair?.priceNative;
     if (priceNative) return parseFloat(priceNative);
   }

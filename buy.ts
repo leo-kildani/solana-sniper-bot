@@ -295,7 +295,7 @@ async function buy(accountId: PublicKey, accountData: LiquidityStateV4): Promise
           url: `https://solscan.io/tx/${signature}?cluster=${network}`,
           dex: `https://dexscreener.com/solana/${accountData.baseMint}?maker=${wallet.publicKey}`,
         },
-        `Confirmed buy tx... Bought at: ${tokenAccount.buyValue}`,
+        `Confirmed buy tx... Bought at: ${tokenAccount.buyValue} SOL`,
       );
     } else {
       logger.debug(confirmation.value.err);
@@ -308,7 +308,6 @@ async function buy(accountId: PublicKey, accountData: LiquidityStateV4): Promise
 }
 
 async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish, value: number): Promise<boolean> {
-  let sold = false;
   let retries = 0;
 
   do {
@@ -337,7 +336,7 @@ async function sell(accountId: PublicKey, mint: PublicKey, amount: BigNumberish,
       if (tokenAccount.buyValue === undefined) return true;
 
       const netChange = (value - tokenAccount.buyValue) / tokenAccount.buyValue;
-      if (netChange > STOP_LOSS && netChange < TAKE_PROFIT) return true;
+      if (netChange > STOP_LOSS && netChange < TAKE_PROFIT) return false;
 
       const { innerTransaction } = Liquidity.makeSwapFixedInInstruction(
         {
@@ -515,9 +514,12 @@ const runListener = async () => {
         // repeadetly check if we have sold at a stop-loss or take-profit
         const intervalId = setInterval(async () => {
           const currValue = await retrieveTokenValueByAddress(accountData.mint.toBase58());
+          logger.info(accountData.mint, `Current Price: ${currValue} SOL`);
           if (currValue) {
             const completed = await sell(updatedAccountInfo.accountId, accountData.mint, accountData.amount, currValue);
             if (completed) clearInterval(intervalId);
+          } else {
+            clearInterval(intervalId);
           }
         }, 1000);
       },
