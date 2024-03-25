@@ -27,7 +27,7 @@ import {
   Commitment,
 } from '@solana/web3.js';
 import { getTokenAccounts, RAYDIUM_LIQUIDITY_PROGRAM_ID_V4, OPENBOOK_PROGRAM_ID, createPoolKeys } from './liquidity';
-import { retrieveEnvVariable, retrieveTokenValueByAddress } from './utils';
+import { retrieveEnvVariable, retrieveTokenValueByAddress} from './utils';
 import { getMinimalMarketV3, MinimalMarketLayoutV3 } from './market';
 import { MintLayout } from './types';
 import pino from 'pino';
@@ -511,17 +511,15 @@ const runListener = async () => {
         if (updatedAccountInfo.accountId.equals(quoteTokenAssociatedAddress)) {
           return;
         }
-        // repeadetly check if we have sold at a stop-loss or take-profit
-        const intervalId = setInterval(async () => {
+        let completed = false;
+        while (!completed) {
+          setTimeout(() => {}, 1000);
           const currValue = await retrieveTokenValueByAddress(accountData.mint.toBase58());
-          logger.info(accountData.mint, `Current Price: ${currValue} SOL`);
           if (currValue) {
-            const completed = await sell(updatedAccountInfo.accountId, accountData.mint, accountData.amount, currValue);
-            if (completed) clearInterval(intervalId);
-          } else {
-            clearInterval(intervalId);
-          }
-        }, 1000);
+            logger.info(accountData.mint, `Current Price: ${currValue} SOL`);
+            completed = await sell(updatedAccountInfo.accountId, accountData.mint, accountData.amount, currValue);
+          } 
+        }
       },
       commitment,
       [

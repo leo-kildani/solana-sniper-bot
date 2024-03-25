@@ -2,6 +2,7 @@ import { Logger } from 'pino';
 import dotenv from 'dotenv';
 import axios, { AxiosResponse } from 'axios';
 import { logger } from '../buy';
+import { res } from 'pino-std-serializers';
 
 dotenv.config();
 
@@ -73,13 +74,42 @@ interface TokensResponse {
   pairs: Pair[] | null;
 }
 
-export const retrieveTokenValueByAddress = async (tokenAddress: string) => {
+export const retrieveTokenValueByAddressDexScreener = async (tokenAddress: string) => {
   const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
-  const tokenResponse: TokensResponse = (await axios.get(url)).data;
-  if (tokenResponse.pairs) {
-    const pair = tokenResponse.pairs.find((pair) => (pair.chainId = 'solana'));
-    const priceNative = pair?.priceNative;
-    if (priceNative) return parseFloat(priceNative);
+  try {
+    const tokenResponse: TokensResponse = (await axios.get(url)).data;
+    if (tokenResponse.pairs) {
+      const pair = tokenResponse.pairs.find((pair) => (pair.chainId = 'solana'));
+      const priceNative = pair?.priceNative;
+      if (priceNative) return parseFloat(priceNative);
+    }
+    return undefined;
+  } catch (e) {
+    return undefined
   }
-  return undefined;
 };
+
+export const retrieveTokenValueByAddressBirdeye = async (tokenAddress: string) => {
+  const apiKey = retrieveEnvVariable('BIRDEYE_API_KEY', logger);
+  const url = `https://public-api.birdeye.so/public/price?address=${tokenAddress}`
+  try {
+    const response: string = (await axios.get(url, {
+      headers: {
+        'X-API-KEY': apiKey
+      }
+    })).data.data.value;
+    if (response) return parseFloat(response)
+    return undefined;
+  } catch (e) {
+    return undefined;  
+  }
+}
+
+export const retrieveTokenValueByAddress = async (tokenAddress: string) => {
+  const dexScreenerPrice = await retrieveTokenValueByAddressDexScreener(tokenAddress);
+  if (dexScreenerPrice) return dexScreenerPrice;
+  const birdEyePrice = await retrieveTokenValueByAddressBirdeye(tokenAddress);
+  if (birdEyePrice) return birdEyePrice;
+  return undefined;
+  
+}
